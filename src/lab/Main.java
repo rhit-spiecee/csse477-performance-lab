@@ -8,7 +8,8 @@ import secret.Server;
 import secret.EvilBusinessLogic;
 import secret.Request;
 
-public class Main {
+public class Main extends Thread{
+	private Request request;
 	public static void main(String[] args) {
 		Server server = new Server();
 		try {
@@ -20,17 +21,18 @@ public class Main {
 		while (true) {
 			try {
 				Request request = server.acceptConnection();
-				handleRequest(request);
-
+				Main obj = new Main();
+				obj.request = request;
+				Thread thread = new Thread(obj);
+				thread.start();
 			} catch (IOException e) {
 				System.err.println("Error accepting request");
 				e.printStackTrace();
 			}
 		}
-
 	}
 
-	public static void handleRequest(Request request) {
+	public void run(){
 		System.out.println("Handling request for " + request.path);
 		switch (request.path) {
 		case "/":
@@ -78,7 +80,6 @@ public class Main {
 			} else {
 				request.respondFile(404, "root/404.html");
 			}
-
 		}
 	}
 }
