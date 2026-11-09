@@ -3,6 +3,8 @@ package lab;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.PriorityQueue;
+import java.util.Comparator;
 
 import secret.Server;
 import secret.EvilBusinessLogic;
@@ -10,6 +12,16 @@ import secret.Request;
 
 public class Main extends Thread{
 	private Request request;
+	static class RequestTask {
+		Request request;
+		int priority;
+		
+		RequestTask(Request request, int priority) {
+			this.request = request;
+			this.priority = priority;
+		}
+	}
+	
 	public static void main(String[] args) {
 		Server server = new Server();
 		try {
@@ -18,18 +30,74 @@ public class Main extends Thread{
 			System.err.println("Failed to bind to socket");
 			System.exit(1);
 		}
+		
+		PriorityQueue<RequestTask> taskQueue = new PriorityQueue<>(
+			Comparator.comparingInt((RequestTask t) -> t.priority).reversed()
+		);
+		
+		Thread queueProcessor = new Thread(() -> {
+			while (true) {
+				RequestTask task = null;
+				synchronized (taskQueue) {
+					while (taskQueue.isEmpty()) {
+						try {
+							taskQueue.wait();
+						} catch (InterruptedException e) {
+							e.printStackTrace();
+						}
+					}
+					task = taskQueue.poll();
+				}
+				
+				if (task != null) {
+					Main obj = new Main();
+					obj.request = task.request;
+					while (Thread.activeCount() >= 4) {
+						System.out.println("Waiting for available thread...");
+						try {
+							Thread.sleep(100);
+						} catch (InterruptedException e) {
+							e.printStackTrace();
+						}
+					}
+					Thread thread = new Thread(obj);
+					thread.start();
+				}
+			}
+		});
+		queueProcessor.setDaemon(true);
+		queueProcessor.start();
+		
 		while (true) {
 			try {
 				Request request = server.acceptConnection();
-				Main obj = new Main();
-				obj.request = request;
-				Thread thread = new Thread(obj);
-				thread.start();
+				int priority = extractPriority(request);
+				
+				synchronized (taskQueue) {
+					taskQueue.offer(new RequestTask(request, priority));
+					taskQueue.notifyAll();
+				}
 			} catch (IOException e) {
 				System.err.println("Error accepting request");
 				e.printStackTrace();
 			}
 		}
+	}
+	
+	private static int extractPriority(Request request) {
+		if (request.path.equals("/super_evil_endpoint") && request.method.equals("POST")) {
+			for (String line : request.body.split("\n")) {
+				String[] parts = line.split(": ");
+				if (parts.length >= 2 && parts[0].equals("evil_priority")) {
+					try {
+						return Integer.parseInt(parts[1]);
+					} catch (NumberFormatException e) {
+						return 0;
+					}
+				}
+			}
+		}
+		return 0;
 	}
 
 	public void run(){
@@ -47,16 +115,22 @@ public class Main extends Thread{
 			int evilPriority = -1;
 			for (String line : request.body.split("\n")) {
 				// very crude arg parsing but it will work for this
-				String[] parts = line.split(": ");
-				switch (parts[0]) {
-				case "evil_name":
-					evilName = parts[1];
-					break;
-				case "evil_priority":
-					evilPriority = Integer.parseInt(parts[1]);
-					break;
-				default:
-					break;
+				String[] parts = line.split(": ", 2);
+				if (parts.length >= 2) {
+					switch (parts[0]) {
+					case "evil_name":
+						evilName = parts[1];
+						break;
+					case "evil_priority":
+						try {
+							evilPriority = Integer.parseInt(parts[1].trim());
+						} catch (NumberFormatException e) {
+							evilPriority = -1;
+						}
+						break;
+					default:
+						break;
+					}
 				}
 			}
 			if (evilName.isEmpty() || evilPriority < 0) {
